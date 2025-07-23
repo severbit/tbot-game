@@ -1,6 +1,20 @@
 import TelegramApi from 'node-telegram-bot-api';
 import { gameOptions, panelOptions } from './options.js';
-const token = "7589691154:AAGXDINWLwofQmneiTnnnxnJ0JeR_2USnXA"
+
+import { sequelize } from './db.js';
+
+import { User } from './models.js';
+// В файле инициализации (перед запуском бота)
+(async () => {
+    try {
+        await sequelize.authenticate();
+        await User.sync();
+        console.log('✅ Таблица User пересоздана');
+    } catch (error) {
+        console.error('❌ Ошибка базы данных:', error);
+    }
+})();
+const token = "7589691154:AAEx111GU9Q36mUlSwFrCxlrpee0J9scINw"
 
 const bot = new TelegramApi(token, { polling: true })
 
@@ -18,51 +32,73 @@ const start = async (chatId) => {
 
 
 bot.on("message", async (msg) => {
-    bot.setMyCommands([
-        { command: "/start", description: "Start the bot" },
-        { command: "/info", description: "Get info about user" },
-        { command: "/game", description: "Play a game" }
-    ])
 
-    const chatId = msg.chat.id;
-    const messageText = msg.text;
+    try {
+        bot.setMyCommands([
+            { command: "/start", description: "Start the bot" },
+            { command: "/info", description: "Get info about user" },
+            { command: "/game", description: "Play a game" }
+        ])
 
-    if (msg.text === "/start") {
-        return bot.sendMessage(chatId, "Welcome to the bot!");
+        const chatId = msg.chat.id;
+        const messageText = msg.text;
+
+        if (msg.text === "/start") {
+            const [user] = await User.findOrCreate({
+                where: { chatId: chatId },
+                defaults: {
+                    rightAnswers: 0,
+                    wrongAnswers: 0
+                }
+            });
+            return bot.sendMessage(chatId, "Welcome to the bot!");
+        }
+
+        if (msg.text === "/info") {
+            const user = await User.findOne({ where: { chatId: chatId } });
+            if (user) {
+                return bot.sendMessage(chatId, `You have ${user.rightAnswers} right answers and ${user.wrongAnswers} wrong answers.`);
+            } else {
+                return bot.sendMessage(chatId, "You have not played any games yet.");
+            }
+        }
+
+        if (msg.text === '/game') {
+            return start(chatId);
+        }
+    } catch (error) {
+        console.error("Error processing message:", error);
+        bot.sendMessage(msg.chat.id, "An error occurred while processing your message. Please try again.");
     }
 
-    if (msg.text === "/info") {
-        const userInfo = `
-        Your id: ${msg.from.id} \n
-        Your Fn ${msg.from.first_name} \n
-        Your Ln ${msg.from.last_name} \n`
-
-        return bot.sendMessage(chatId, `You sent: ${messageText} \n\n ${userInfo}`);
-    }
-
-    if (msg.text === '/game') {
-        return start(chatId);
-    }
 });
 
 bot.on("callback_query", async (query) => {
     const chatId = query.message.chat.id;
-    
+
     // Проверяем сначала, не нажата ли кнопка "Играть снова"
     if (query.data === '/game') {
         delete chats[chatId]; // Очищаем предыдущую игру, если нужно
         return start(chatId);
     }
-    
+
     // Если это не кнопка "Играть снова", обрабатываем ответ
     const userAnswer = parseInt(query.data);
     const correctAnswer = chats[chatId];
 
-    if (userAnswer === correctAnswer) {
-        await bot.sendMessage(chatId, `You guessed it! The number was ${userAnswer}`, panelOptions);
-    } else {
-        await bot.sendMessage(chatId, `You didn't guess it! The number was ${correctAnswer}`, panelOptions);
+    const user = await User.findOne({ where: { chatId: chatId } });
+
+    if (user) {
+        if (userAnswer === correctAnswer) {
+            await bot.sendMessage(chatId, `You guessed it! The number was ${userAnswer}`, panelOptions);
+            user.rightAnswers += 1;
+            await user.save();
+        } else {
+            await bot.sendMessage(chatId, `You didn't guess it! The number was ${correctAnswer}`, panelOptions);
+            user.wrongAnswers += 1;
+            await user.save();
+        }
     }
-    
+
     delete chats[chatId];
 });
